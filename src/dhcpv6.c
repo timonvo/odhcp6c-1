@@ -780,7 +780,7 @@ static int dhcpv6_handle_advert(enum dhcpv6_msg orig, const int rc,
 {
 	uint16_t olen, otype;
 	uint8_t *odata, pref = 0;
-	struct dhcpv6_server_cand cand = {false, false, 0, 0, {0},
+	struct dhcpv6_server_cand cand = {false, false, false, 0, 0, {0},
 					DHCPV6_SOL_MAX_RT,
 					DHCPV6_INF_MAX_RT, NULL, NULL, 0, 0};
 	bool have_na = false;
@@ -832,18 +832,6 @@ static int dhcpv6_handle_advert(enum dhcpv6_msg orig, const int rc,
 		}
 	}
 
-	if ((!have_na && na_mode == IA_MODE_FORCE) ||
-			(!have_pd && pd_mode == IA_MODE_FORCE)) {
-		/*
-		 * RFC7083 states to process the SOL_MAX_RT and
-		 * INF_MAX_RT options even if the DHCPv6 server
-		 * did not propose any IA_NA and/or IA_PD
-		 */
-		dhcpv6_retx[DHCPV6_MSG_SOLICIT].max_timeo = cand.sol_max_rt;
-		dhcpv6_retx[DHCPV6_MSG_INFO_REQ].max_timeo = cand.inf_max_rt;
-		return -1;
-	}
-
 	if (na_mode != IA_MODE_NONE && !have_na) {
 		cand.has_noaddravail = true;
 		cand.preference -= 1000;
@@ -852,8 +840,10 @@ static int dhcpv6_handle_advert(enum dhcpv6_msg orig, const int rc,
 	if (pd_mode != IA_MODE_NONE) {
 		if (have_pd)
 			cand.preference += 2000 + (128 - have_pd);
-		else
+		else {
+			cand.has_noprefixavail = true;
 			cand.preference -= 2000;
+		}
 	}
 
 	if (cand.duid_len > 0) {
@@ -1415,12 +1405,23 @@ int dhcpv6_promote_server_cand(void)
 	if (!cand_len)
 		return -1;
 
+	bool retry = false;
 	if (cand->has_noaddravail && na_mode == IA_MODE_TRY) {
 		na_mode = IA_MODE_NONE;
-
+		retry = true;
+	}
+	if (cand->has_noprefixavail && pd_mode == IA_MODE_TRY) {
+		pd_mode = IA_MODE_NONE;
+		retry = true;
+	}
+	if (retry) {
+		/*
+		 * RFC7083 states to process the SOL_MAX_RT and
+		 * INF_MAX_RT options even if the DHCPv6 server
+		 * did not propose any IA_NA and/or IA_PD
+		 */
 		dhcpv6_retx[DHCPV6_MSG_SOLICIT].max_timeo = cand->sol_max_rt;
 		dhcpv6_retx[DHCPV6_MSG_INFO_REQ].max_timeo = cand->inf_max_rt;
-
 		return dhcpv6_request(DHCPV6_MSG_SOLICIT);
 	}
 
